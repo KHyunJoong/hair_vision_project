@@ -1,0 +1,9 @@
+path: ./
+train: hair/images/train
+val: hair/images/validation
+
+# Classes
+nc: 4
+names: ['1hair', '2hair', '3hair', '4hair']
+
+
