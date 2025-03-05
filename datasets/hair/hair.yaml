@@ -1,0 +1,9 @@
+path: C:/Users/goesy/PycharmProjects/hair_vision_project/datasets/hair
+train: C:/Users/goesy/PycharmProjects/hair_vision_project/datasets/hair/images/train
+val: C:/Users/goesy/PycharmProjects/hair_vision_project/datasets/hair/images/validation
+
+# Classes
+nc: 4
+names: ['1hair', '2hair', '3hair', '4hair']
+
+
