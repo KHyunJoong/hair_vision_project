@@ -1,0 +1,540 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from sklearn.model_selection import train_test_split
+import time
+import datetime
+from torch.utils.data import DataLoader, TensorDataset
+import os
+import csv
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+#이미지 위치변경 및 파일 세팅
+#
+# paths=[]
+# for dirname, _, filenames in os.walk('./testdata'):
+#     for filename in filenames:
+#         paths+=[(os.path.join(dirname, filename))]
+# print(paths)
+# os.makedirs("./testdata/images", exist_ok=True)  # 이미 존재하면 무시
+# os.makedirs("./testdata/masks", exist_ok=True)
+#
+# for path in paths:
+#     file = os.path.basename(path)  # 파일 이름만 추출
+#     if file.startswith("mask"):
+#         shutil.move(path, "./testdata/masks")  # 파일을 masks 폴더로 이동 (잘라내기)
+#     elif file.endswith(".png"):
+#         shutil.move(path, "./testdata/images")  # 파일을 images 폴더로 이동 (잘라내기)
+
+#수정중
+# images_dir ='./testdata/images'
+# masks_dir = './testdata/masks'
+#
+# images_listdir = sorted(os.listdir(images_dir))
+# masks_listdir = sorted(os.listdir(masks_dir))
+# N=list(range(9))
+# random_N = N
+#
+# print(len(images_listdir))
+# print(len(masks_listdir))
+#
+# image_size=512
+# input_image_size=(512,512)
+#
+# def read_image(path):
+#     img = cv2.imread(path)
+#     img = cv2.resize(img, (image_size, image_size))
+#     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+#     return img
+#
+# number=120
+#
+# MASKS=np.zeros((1,image_size, image_size, 1), dtype=bool)
+# IMAGES=np.zeros((1,image_size, image_size, 3),dtype=np.uint8)
+#
+# for j,file in enumerate(images_listdir):   ##the smaller, the faster
+#     try:
+#         image = read_image(f"{images_dir}/{file}")
+#         image_ex = np.expand_dims(image, axis=0)
+#         IMAGES = np.vstack([IMAGES, image_ex])
+#         mask = read_image(f"{masks_dir}/{masks_listdir[j]}")
+#         mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+#         mask = mask.reshape(512,512,1)
+#         mask_ex = np.expand_dims(mask, axis=0)
+#         MASKS = np.vstack([MASKS, mask_ex])
+#     except:
+#         print(file)
+#         continue
+#
+# images=np.array(IMAGES)[1:number+1]
+# masks=np.array(MASKS)[1:number+1]
+# print(images.shape,masks.shape)
+#
+# images_train, images_test, masks_train, masks_test = train_test_split(
+#     images, masks, test_size=0.2, random_state=42)
+
+
+class ConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(ConvBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        return x
+
+class EncoderBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(EncoderBlock, self).__init__()
+        self.conv = ConvBlock(in_channels, out_channels)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+
+    def forward(self, x):
+        skip = self.conv(x)
+        pool = self.pool(skip)
+        return skip, pool
+
+class DecoderBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(DecoderBlock, self).__init__()
+        self.upconv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
+        self.conv = ConvBlock(out_channels * 2, out_channels)
+
+    def forward(self, x, skip):
+        x = self.upconv(x)
+        x = torch.cat([x, skip], dim=1)
+        x = self.conv(x)
+        return x
+
+class UNet(nn.Module):
+    def __init__(self, input_channels=3, output_channels=1):
+        super(UNet, self).__init__()
+        self.encoder1 = EncoderBlock(input_channels, 64)
+        self.encoder2 = EncoderBlock(64, 128)
+        self.encoder3 = EncoderBlock(128, 256)
+        self.encoder4 = EncoderBlock(256, 512)
+
+        self.bridge = ConvBlock(512, 1024)
+
+        self.decoder1 = DecoderBlock(1024, 512)
+        self.decoder2 = DecoderBlock(512, 256)
+        self.decoder3 = DecoderBlock(256, 128)
+        self.decoder4 = DecoderBlock(128, 64)
+
+        self.final_conv = nn.Conv2d(64, output_channels, kernel_size=1)
+
+    def forward(self, x):
+        s1, p1 = self.encoder1(x)
+        s2, p2 = self.encoder2(p1)
+        s3, p3 = self.encoder3(p2)
+        s4, p4 = self.encoder4(p3)
+
+        b = self.bridge(p4)
+
+        d1 = self.decoder1(b, s4)
+        d2 = self.decoder2(d1, s3)
+        d3 = self.decoder3(d2, s2)
+        d4 = self.decoder4(d3, s1)
+
+        outputs = torch.sigmoid(self.final_conv(d4))
+        return outputs
+def save_model(model,epochs,result_dir ):
+    path=f"{result_dir}/unet_model_{epochs}.pth"
+    torch.save(model.state_dict(), path)
+    print(f"✅ 모델이 저장되었습니다: {path}")
+def load_model(model, epochs,result_dir):
+    path=f"{result_dir}/unet_model_{epochs}.pth"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.load_state_dict(torch.load(path, map_location=device))
+    model.to(device)
+    print(f"✅ 모델이 불러와졌습니다: {path}")
+# 모델 생성 및 테스트
+# model = UNet(input_channels=3, output_channels=1)
+# print(model)
+def load_data(images_dir, masks_dir, image_size=512, test_size=0.2, val_size=0.2):
+    """
+    이미지 및 마스크 데이터를 로드하고, Train/Validation/Test 데이터로 분할하는 함수
+
+    Args:
+        images_dir (str): 이미지 폴더 경로
+        masks_dir (str): 마스크 폴더 경로
+        image_size (int, optional): 이미지 크기 (기본값: 512)
+        test_size (float, optional): Test 데이터 비율 (기본값: 0.2)
+        val_size (float, optional): Train 데이터에서 Validation 데이터로 사용할 비율 (기본값: 0.2)
+
+    Returns:
+        Tuple: (images_train, images_val, images_test, masks_train, masks_val, masks_test)
+    """
+    images_listdir = sorted(os.listdir(images_dir))
+    masks_listdir = sorted(os.listdir(masks_dir))
+
+    print(f"총 이미지 개수: {len(images_listdir)}")
+    print(f"총 마스크 개수: {len(masks_listdir)}")
+
+    # 이미지 및 마스크 데이터 로드
+    images, masks = [], []
+    for j, file in enumerate(images_listdir):
+        try:
+            image = cv2.imread(os.path.join(images_dir, file))
+            image = cv2.resize(image, (image_size, image_size))
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # RGB 변환
+            images.append(image)
+
+            mask = cv2.imread(os.path.join(masks_dir, masks_listdir[j]), cv2.IMREAD_GRAYSCALE)
+            mask = cv2.resize(mask, (image_size, image_size))
+            mask = np.expand_dims(mask, axis=-1)  # (H, W) → (H, W, 1)
+            mask = (mask > 127).astype(np.uint8)  # Threshold 적용하여 0과 1로 변환
+            masks.append(mask)
+
+        except Exception as e:
+            print(f"파일 로드 오류: {file} - {e}")
+            continue
+
+    images = np.array(images, dtype=np.uint8)
+    masks = np.array(masks, dtype=np.uint8)
+
+    print(f"로드된 이미지 형태: {images.shape}, 마스크 형태: {masks.shape}")
+
+    # ✅ Train/Test Split (Test 데이터 먼저 분리)
+    images_train_full, images_test, masks_train_full, masks_test = train_test_split(
+        images, masks, test_size=test_size, random_state=42
+    )
+
+    # ✅ Train/Validation Split (Train 데이터에서 Validation 분리)
+    images_train, images_val, masks_train, masks_val = train_test_split(
+        images_train_full, masks_train_full, test_size=val_size, random_state=42
+    )
+
+    print(f"Train: {images_train_full.shape}, Validation: {images_val.shape}, Test: {images_test.shape}")
+    return images_train_full, images_val, images_test, masks_train_full, masks_val, masks_test
+
+
+# ✅ Train DataLoader 생성 함수
+def train_data_load(images_train, masks_train, batch_size):
+    """
+    Train 데이터를 PyTorch DataLoader로 변환하는 함수
+
+    Args:
+        images_train (numpy.ndarray): 학습 이미지 (HWC 형식)
+        masks_train (numpy.ndarray): 학습 마스크 (HWC 형식)
+        batch_size (int): 배치 크기
+
+    Returns:
+        DataLoader: PyTorch DataLoader 객체
+    """
+    images_train_torch = torch.tensor(images_train, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
+    masks_train_torch = torch.tensor(masks_train, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0  # 정규화
+
+    print("Train Masks min/max:", masks_train_torch.min().item(), masks_train_torch.max().item())
+
+    train_dataset = TensorDataset(images_train_torch, masks_train_torch)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    return train_loader
+
+
+# ✅ Validation DataLoader 생성 함수
+def val_data_load(images_val, masks_val, batch_size):
+    """
+    Validation 데이터를 PyTorch DataLoader로 변환하는 함수
+
+    Args:
+        images_val (numpy.ndarray): 검증 이미지 (HWC 형식)
+        masks_val (numpy.ndarray): 검증 마스크 (HWC 형식)
+        batch_size (int): 배치 크기
+
+    Returns:
+        DataLoader: PyTorch DataLoader 객체
+    """
+    images_val_torch = torch.tensor(images_val, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
+    masks_val_torch = torch.tensor(masks_val, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0  # 정규화
+
+    print("Validation Masks min/max:", masks_val_torch.min().item(), masks_val_torch.max().item())
+
+    val_dataset = TensorDataset(images_val_torch, masks_val_torch)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)  # 검증 데이터는 일반적으로 shuffle=False
+    return val_loader
+
+
+
+# # 데이터 변환 (0~255 값을 0~1로 정규화)
+# def train_data_load(images_train, masks_train, batch_size):
+#     images_train_torch = torch.tensor(images_train, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
+#     masks_train_torch = torch.tensor(masks_train, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0  # ✅ 마스크도 정규화
+#
+#     # 마스크 값이 0~1 사이인지 확인
+#     print("Masks min/max:", masks_train_torch.min().item(), masks_train_torch.max().item())
+#
+#     # PyTorch DataLoader 설정
+#     train_dataset = TensorDataset(images_train_torch, masks_train_torch)
+#     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+#     return train_loader
+# def val_data_load(images_train, masks_train, batch_size):
+#     images_val_torch = torch.tensor(images_val, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
+#     masks_val_torch = torch.tensor(masks_val, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0  # ✅ 마스크도 정규화
+#
+#     # 마스크 값이 0~1 사이인지 확인
+#     print("Masks min/max:", masks_val_torch.min().item(), masks_val_torch.max().item())
+#
+#     # PyTorch DataLoader 설정
+#     val_dataset = TensorDataset(images_val_torch, masks_val_torch)
+#     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
+#     return train_loader
+def compute_iou(preds, targets, threshold=0.5):
+    preds = (preds > threshold).float()
+    intersection = (preds * targets).sum()
+    union = preds.sum() + targets.sum() - intersection
+    return (intersection / union).item() if union > 0 else 1.0
+
+def compute_dice(preds, targets, threshold=0.5):
+    preds = (preds > threshold).float()
+    intersection = (preds * targets).sum()
+    return (2. * intersection / (preds.sum() + targets.sum())).item() if (preds.sum() + targets.sum()) > 0 else 1.0
+
+def model_train(train_data, val_data, epochs, learning_rate,log_file):
+    # Hyperparameters
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = UNet(input_channels=3, output_channels=1).to(device)
+    criterion = nn.BCELoss()  # 바이너리 크로스엔트로피
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+    # CSV 파일로 로깅
+    with open(log_file, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['epochs:',epochs,'batch_size',batch_size,])
+        writer.writerow(["Epoch", "Train Loss", "Validation Loss", "IoU", "Dice Score", "Time (s)", "Learning Rate", "GPU Memory (MB)"])
+
+    for epoch in range(epochs):
+        model.train()
+        running_loss = 0.0
+        start_time = time.perf_counter()
+
+        for images, masks in train_data:
+            images, masks = images.to(device), masks.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, masks)  # ✅ masks 값이 0~1 범위여야 함
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item()
+
+        avg_train_loss = running_loss / len(train_data)
+
+        # ✅ Validation 과정 추가
+        model.eval()
+        val_loss = 0.0
+        iou_scores = []
+        dice_scores = []
+
+        with torch.no_grad():
+            for images, masks in val_data:
+                images, masks = images.to(device), masks.to(device)
+                outputs = model(images)
+                loss = criterion(outputs, masks)
+                val_loss += loss.item()
+
+                # IoU, Dice Score 계산
+                iou = compute_iou(outputs, masks)
+                dice = compute_dice(outputs, masks)
+                iou_scores.append(iou)
+                dice_scores.append(dice)
+
+        avg_val_loss = val_loss / len(val_data)
+        avg_iou = np.mean(iou_scores)
+        avg_dice = np.mean(dice_scores)
+        elapsed_time = time.perf_counter() - start_time
+        current_lr = optimizer.param_groups[0]['lr']
+        gpu_memory = torch.cuda.memory_allocated(device) / 1024 ** 2  # MB 단위
+
+        # 로그 기록
+        with open(log_file, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([epoch+1, avg_train_loss, avg_val_loss, avg_iou, avg_dice, elapsed_time, current_lr, gpu_memory])
+
+        print(f"Epoch [{epoch+1}/{epochs}] | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | IoU: {avg_iou:.4f} | Dice: {avg_dice:.4f} | Time: {elapsed_time:.2f}s | LR: {current_lr:.6f} | GPU: {gpu_memory:.2f}MB")
+
+    save_model(model, epochs,result_dir)
+    print("Model saved!")
+    print("Training complete!")
+
+
+# ✅ IoU & Dice Score 계산 함수
+
+
+# ✅ IoU & Dice Score 계산 함수
+def compute_iou_test(preds, targets):
+    intersection = np.logical_and(preds, targets).sum()
+    union = np.logical_or(preds, targets).sum()
+    return intersection / union if union > 0 else 1.0
+
+def compute_dice_test(preds, targets):
+    intersection = np.logical_and(preds, targets).sum()
+    return (2. * intersection) / (preds.sum() + targets.sum()) if (preds.sum() + targets.sum()) > 0 else 1.0
+
+# ✅ 이미지 저장 함수 (IoU 시각화 + 범례 추가)
+def save_result_image(idx, og, unet, target, p, iou_score, dice_score, save_path):
+    fig, axs = plt.subplots(1, 4, figsize=(20, 12))
+
+    # ✅ Ground Truth (정답 마스크) → 0번 위치
+    axs[0].imshow(target, cmap="gray")
+    axs[0].set_title("Ground Truth")
+    axs[0].axis("off")
+
+    # ✅ IoU 시각화 → 1번 위치
+    if target.ndim == 3 and target.shape[-1] == 1:
+        target = target.squeeze(-1)  # (H, W, 1) → (H, W)
+
+    intersection = np.logical_and(unet, target)
+    union = np.logical_or(unet, target)
+
+    iou_visual = np.zeros((*unet.shape, 3), dtype=np.uint8)  # (H, W, 3)
+    iou_visual[target.astype(bool)] = [0, 255, 0]  # GT → 초록색
+    iou_visual[unet.astype(bool)] = [0, 0, 255]  # 예측 → 파란색
+    iou_visual[intersection.astype(bool)] = [255, 255, 255]  # 겹치는 부분 → 흰색
+
+    axs[1].imshow(iou_visual)
+    axs[1].set_title(f"IoU Visualization {idx}\nIoU: {iou_score:.4f} | Dice: {dice_score:.4f}")
+    axs[1].axis("off")
+
+    # ✅ 원본 이미지 → 2번 위치
+    axs[2].imshow(og)
+    axs[2].set_title(f"Original {idx}")
+    axs[2].axis("off")
+
+    # ✅ 예측 마스크 → 3번 위치
+    axs[3].imshow(unet, cmap="gray")
+    axs[3].set_title(f"U-Net Prediction (p > {p})")
+    axs[3].axis("off")
+
+    # ✅ 범례 추가 (Green = GT, Blue = Prediction, White = Intersection)
+    green_patch = mpatches.Patch(color='green', label='Ground Truth (GT)')
+    blue_patch = mpatches.Patch(color='blue', label='Predicted Mask')
+    white_patch = mpatches.Patch(color='white', label='Intersection (IoU)')
+
+    # ✅ 범례를 figure 전체에 추가 (좌하단 fig 밖에 위치)
+    legend_fig = fig.legend(
+        handles=[green_patch, blue_patch, white_patch],
+        loc='lower left',  # 왼쪽 아래 (fig 바깥쪽)
+        bbox_to_anchor=(-0.05, -0.05),  # fig 바깥쪽 위치 조정 (x, y)
+        fontsize=12,
+        framealpha=0.7,  # 투명도 설정
+        edgecolor="black"  # 테두리 색상 추가
+    )
+
+    # ✅ 이미지 저장 (IoU & Dice Score 포함)
+    plt.savefig(save_path, bbox_inches='tight', dpi=300)
+    plt.close()
+
+
+
+# ✅ 테스트 데이터 로드 함수
+def test_data_load(images_test):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    images_test_torch = torch.tensor(images_test, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
+    images_test_torch = images_test_torch.to(device)
+    return images_test_torch
+
+# ✅ 모델 테스트 및 결과 저장 함수
+def model_test(test_data, masks_test, images_test, epochs, Threshold):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = UNet(input_channels=3, output_channels=1).to(device)
+    load_model(model, epochs,result_dir)
+
+    # 모델을 평가 모드로 전환
+    model.eval()
+
+    # 모델 예측
+    with torch.no_grad():
+        unet_predict = model(test_data)
+        unet_predict = torch.sigmoid(unet_predict)  # BCE Loss 사용 시 필요
+
+    # NumPy 변환
+    unet_predict = unet_predict.cpu().numpy().squeeze(1)  # (batch, 1, H, W) → (batch, H, W)
+
+    # Threshold 적용
+    r_values = Threshold
+    unet_predictions = [(unet_predict > r).astype(np.uint8) for r in r_values]
+
+    # CSV 저장 파일 생성
+    csv_file = os.path.join(result_dir, "test_results.csv")
+    with open(csv_file, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["Index", "Threshold", "IoU", "Dice Score"])
+
+        # 모든 테스트 이미지에 대해 처리
+        for idx in range(len(unet_predict)):
+            for i, r in enumerate(r_values):
+                # IoU & Dice Score 계산
+                iou = compute_iou_test(unet_predictions[i][idx], masks_test[idx])
+                dice = compute_dice_test(unet_predictions[i][idx], masks_test[idx])
+
+                # CSV 저장
+                writer.writerow([idx, r, round(iou, 4), round(dice, 4)])
+
+                # 이미지 저장
+                save_path = os.path.join(result_dir, f"result_{idx}_threshold_{r}.png")
+                save_result_image(idx, images_test[idx], unet_predictions[i][idx], masks_test[idx], r,iou, dice, save_path)
+                # IoU 시각화 및 점수 출력
+                print(f"[Index {idx}, Threshold {r}] IoU: {iou:.4f}, Dice Score: {dice:.4f}")
+
+    # 모델 예측 결과 `.npy` 파일로 저장
+    np.save(os.path.join(result_dir, "unet_predictions.npy"), unet_predict)
+
+    print(f"✅ 테스트 결과 저장 완료! 폴더: {result_dir}")
+
+
+def with_log(epochs,learning_rate,batch_size,Augmentation:bool,images_dir,masks_dir,image_size, test_size, val_size,timestamp,result_dir):
+    log_file = f"{result_dir}/train_log{epochs}epochs_{timestamp}.csv"
+    with open(log_file, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['time:',timestamp,'epochs:',epochs,'learning_rate:',learning_rate,'batch_size:',batch_size,
+                         'Augmentation:',Augmentation,'images_dir:',images_dir,'masks_dir:',masks_dir,
+                         'image_size:',image_size,'Train:Test:Val :',1-test_size,':',test_size,':',val_size])
+        if Augmentation:
+            writer.writerow(['Augmentation:'])
+    # 데이터 로드 및 Train/Val/Test 분할
+    images_train, images_val, images_test, masks_train, masks_val, masks_test = load_data(images_dir, masks_dir,image_size,test_size,val_size)
+
+    # DataLoader 생성
+    train_loader = train_data_load(images_train, masks_train, batch_size)
+    val_loader = val_data_load(images_val, masks_val, batch_size)
+    model_train(train_loader,val_loader,epochs,learning_rate,log_file)
+# 🔹 학습된 모델 불러오기
+timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+images_dir = "./testdata/images"
+masks_dir = "./testdata/masks"
+batch_size = 4
+epochs = 10
+learning_rate = 0.001
+image_size = 512
+test_size =0.2
+val_size = 0.2
+Augmentation = False
+
+
+# ✅ 결과 저장을 위한 폴더 생성
+result_dir = f"./unet/test_results{timestamp}"
+os.makedirs(result_dir, exist_ok=True)
+
+# 모델 학습
+with_log(epochs, learning_rate,batch_size,False,images_dir,masks_dir,image_size, test_size, val_size,timestamp,result_dir)
+
+
+# ✅ 데이터 로드
+images_train, images_val, images_test, masks_train, masks_val, masks_test = load_data(images_dir, masks_dir, image_size, test_size, val_size)
+
+# ✅ 테스트 실행
+Threshold = [0.6, 0.65, 0.7, 0.75]
+model_test(test_data_load(images_test), masks_test, images_test, 10, Threshold)
