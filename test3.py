@@ -12,7 +12,7 @@ if __name__ == '__main__':
 
     # 모델 학습
     model.train(data='datasets/hair/hair.yaml',
-                epochs=10,
+                epochs=100,
                 project='hair',
                 name='hair_model',
                 device='cuda')
