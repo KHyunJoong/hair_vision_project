@@ -267,18 +267,21 @@ def apply_augmentation(images, masks, apply_aug=True, augmentation_factor=10):
     """
     transform = get_augmentation(apply_aug)
     augmented_images, augmented_masks = [], []
+    if apply_aug:
+        print('aug_T')
+        for img, mask in zip(images, masks):
+            augmented_images.append(img)  # 원본 추가
+            augmented_masks.append(mask)
 
-    for img, mask in zip(images, masks):
-        augmented_images.append(img)  # 원본 추가
-        augmented_masks.append(mask)
+            for _ in range(augmentation_factor - 1):  # ✅ N배 증강
+                augmented = transform(image=img, mask=mask)
+                augmented_images.append(augmented['image'])
+                augmented_masks.append(augmented['mask'])
 
-        for _ in range(augmentation_factor - 1):  # ✅ N배 증강
-            augmented = transform(image=img, mask=mask)
-            augmented_images.append(augmented['image'])
-            augmented_masks.append(augmented['mask'])
-
-    return np.array(augmented_images), np.array(augmented_masks)
-
+        return np.array(augmented_images), np.array(augmented_masks)
+    else:
+        print('aug_F')
+        return  images, masks
 
 
 # ✅ Augmentation 적용 후 시각화 함수
@@ -317,6 +320,39 @@ def visualize_augmentation(images, masks, apply_aug=True, num_samples=3):
 
 # ✅ Train DataLoader 생성 함수
 # ✅ Train DataLoader 생성 함수 (Augmentation On/Off 가능)
+# def train_data_load(images_train, masks_train, batch_size, apply_aug=False, augmentation_factor=10):
+#     """
+#     Train 데이터를 Augmentation 후 PyTorch DataLoader로 변환하는 함수
+#
+#     Args:
+#         images_train (numpy.ndarray): 학습 이미지 (HWC 형식)
+#         masks_train (numpy.ndarray): 학습 마스크 (HWC 형식)
+#         batch_size (int): 배치 크기
+#         apply_aug (bool): Augmentation 적용 여부 (True: 적용, False: 미적용)
+#         augmentation_factor (int): Augmentation 적용 시 몇 배로 증강할지 설정
+#
+#     Returns:
+#         DataLoader: PyTorch DataLoader 객체
+#     """
+#     # ✅ 증강 전 데이터 크기 확인
+#     print(f"🔹 Augmentation 전 데이터 크기: images = {images_train.shape}, masks = {masks_train.shape}")
+#
+#     # ✅ Train DataLoader 생성 함수 (Augmentation On/Off 가능)
+#     images_train_aug, masks_train_aug = apply_augmentation(images_train, masks_train, apply_aug, augmentation_factor)
+#
+#     # ✅ 증강 후 데이터 크기 확인
+#     print(f"✅ Augmentation 적용 후 데이터 크기: images = {images_train_aug.shape}, masks = {masks_train_aug.shape}")
+#
+#     # PyTorch Tensor 변환
+#     images_train_torch = torch.tensor(images_train_aug, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
+#     masks_train_torch = torch.tensor(masks_train_aug, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0  # 정규화
+#
+#     train_dataset = TensorDataset(images_train_torch, masks_train_torch)
+#     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+#
+#     return train_loader
+
+
 def train_data_load(images_train, masks_train, batch_size, apply_aug=False, augmentation_factor=10):
     """
     Train 데이터를 Augmentation 후 PyTorch DataLoader로 변환하는 함수
@@ -334,21 +370,29 @@ def train_data_load(images_train, masks_train, batch_size, apply_aug=False, augm
     # ✅ 증강 전 데이터 크기 확인
     print(f"🔹 Augmentation 전 데이터 크기: images = {images_train.shape}, masks = {masks_train.shape}")
 
+    # ✅ 마스크 값 범위 확인 (정규화 필요 여부 확인)
+    print(f"🔍 마스크 데이터 최소값: {masks_train.min()}, 최대값: {masks_train.max()}")
+
     # ✅ Train DataLoader 생성 함수 (Augmentation On/Off 가능)
     images_train_aug, masks_train_aug = apply_augmentation(images_train, masks_train, apply_aug, augmentation_factor)
 
     # ✅ 증강 후 데이터 크기 확인
     print(f"✅ Augmentation 적용 후 데이터 크기: images = {images_train_aug.shape}, masks = {masks_train_aug.shape}")
 
+    # ✅ Augmentation 후 마스크 값 범위 확인 (반전 여부 체크)
+    print(f"🔍 증강 후 마스크 데이터 최소값: {masks_train_aug.min()}, 최대값: {masks_train_aug.max()}")
+
     # PyTorch Tensor 변환
     images_train_torch = torch.tensor(images_train_aug, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
-    masks_train_torch = torch.tensor(masks_train_aug, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0  # 정규화
+    masks_train_torch = torch.tensor(masks_train_aug, dtype=torch.float32).permute(0, 3, 1, 2)   # 정규화
+
+    # ✅ PyTorch Tensor 변환 후 마스크 값 범위 확인
+    print(f"🛠 변환 후 마스크 최소값: {masks_train_torch.min()}, 최대값: {masks_train_torch.max()}")
 
     train_dataset = TensorDataset(images_train_torch, masks_train_torch)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
     return train_loader
-
 
 
 
@@ -373,7 +417,7 @@ def val_data_load(images_val, masks_val, batch_size, apply_aug=False, augmentati
 
     # PyTorch Tensor 변환
     images_val_torch = torch.tensor(images_val_aug, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
-    masks_val_torch = torch.tensor(masks_val_aug, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0  # 정규화
+    masks_val_torch = torch.tensor(masks_val_aug, dtype=torch.float32).permute(0, 3, 1, 2)   # 정규화
 
     print("Validation Masks min/max:", masks_val_torch.min().item(), masks_val_torch.max().item())
 
@@ -634,41 +678,41 @@ def with_log(epochs, learning_rate, batch_size, apply_aug: bool, augmentation_fa
 
 
 
-# # 🔹 학습된 모델 불러오기
-# timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-# images_dir = "./testdata/images"
-# masks_dir = "./testdata/masks"
-# batch_size = 4
-# epochs = 10
-# learning_rate = 0.001
-# image_size = 512
-# test_size =0.2
-# val_size = 0.2
-# Augmentation = True
-# augmentation_factor = 10
-#
-#
-# # ✅ 결과 저장을 위한 폴더 생성
-# result_dir = f"./unet/test_results{timestamp}"
-# os.makedirs(result_dir, exist_ok=True)
-#
-# # 모델 학습
-# with_log(epochs, learning_rate,batch_size,Augmentation,augmentation_factor,images_dir,masks_dir,image_size, test_size, val_size,timestamp,result_dir)
-#
-#
-# # ✅ 데이터 로드
-# images_train, images_val, images_test, masks_train, masks_val, masks_test = load_data(images_dir, masks_dir, image_size, test_size, val_size)
-#
+# 🔹 학습된 모델 불러오기
+timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+images_dir = "./testdata/images"
+masks_dir = "./testdata/masks"
+batch_size = 16
+epochs = 200
+learning_rate = 0.0001
+image_size = 512
+test_size =0.2
+val_size = 0.2
+Augmentation = True
+augmentation_factor = 10
+
+
+# ✅ 결과 저장을 위한 폴더 생성
+result_dir = f"./unet/test_results{timestamp}"
+os.makedirs(result_dir, exist_ok=True)
+
+# 모델 학습
+with_log(epochs, learning_rate,batch_size,Augmentation,augmentation_factor,images_dir,masks_dir,image_size, test_size, val_size,timestamp,result_dir)
+
+
+# ✅ 데이터 로드
+images_train, images_val, images_test, masks_train, masks_val, masks_test = load_data(images_dir, masks_dir, image_size, test_size, val_size)
+
 # # ✅ Augmentation 켜고 실행
 # visualize_augmentation(images_train, masks_train, apply_aug=True, num_samples=3)
 #
 #
 # # ✅ Augmentation 끄고 실행
 # visualize_augmentation(images_train, masks_train, apply_aug=False, num_samples=3)
-#
-#
-# # ✅ 테스트 실행 (결과 저장 디렉토리 반영)
-# Threshold = [0.6, 0.65, 0.7, 0.75]
-# model_test(test_data_load(images_test), masks_test, images_test, epochs, Threshold, result_dir)
-# Threshold = [0.8, 0.85, 0.9, 0.99]
-# model_test(test_data_load(images_test), masks_test, images_test, epochs, Threshold, result_dir)
+
+
+# ✅ 테스트 실행 (결과 저장 디렉토리 반영)
+Threshold = [0.4, 0.5, 0.6, 0.7]
+model_test(test_data_load(images_test), masks_test, images_test, epochs, Threshold, result_dir)
+Threshold = [0.45, 0.55, 0.65, 0.75]
+model_test(test_data_load(images_test), masks_test, images_test, epochs, Threshold, result_dir)
