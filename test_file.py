@@ -198,6 +198,169 @@ result_dir = "./unet/test3"
 epochs = 200
 Threshold = [0.65]
 image_size = 512
+import torch
+import torch.quantization
+
+# 🔹 학습된 모델 로드
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model_path = f"{model_dir}/unet_model_{epochs}.pth"
+
+# 🔹 원본 모델 로드
+model = UNet(input_channels=3, output_channels=1)
+model.load_state_dict(torch.load(model_path, map_location=device))
+model.to(device)
+model.eval()
+
+# 🔹 동적 양자화 적용 (Linear 레이어만 INT8 변환 가능)
+quantized_model = torch.quantization.quantize_dynamic(
+    model, {torch.nn.Linear}, dtype=torch.qint8  # Linear 부분만 INT8 변환
+)
+
+# 🔹 양자화된 모델 저장
+quantized_model_path = f"{result_dir}/unet_model_{epochs}_dynamic_quantized.pth"
+torch.save(quantized_model.state_dict(), quantized_model_path)
+
+print(f"✅ 동적 양자화 완료! 저장된 경로: {quantized_model_path}")
+
 # ✅ 데이터 로드
 images_test= load_data2(images_dir, image_size)
 model_test2(test_data_load(images_test), images_test, epochs,Threshold, model_dir, result_dir)
+
+#%%
+import torch
+import onnx
+print("ONNX 버전:", onnx.__version__)
+# 🔹 양자화된 모델 로드
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+quantized_model_path = f"{result_dir}/unet_model_{epochs}_dynamic_quantized.pth"
+
+# 🔹 원본 모델 정의
+model = UNet(input_channels=3, output_channels=1)
+model.load_state_dict(torch.load(quantized_model_path, map_location=device))
+model.to(device)
+model.eval()
+
+# 🔹 더미 입력 생성 (입력 크기: 1x3x512x512)
+dummy_input = torch.randn(1, 3, 512, 512).to(device)
+
+# 🔹 ONNX 변환 실행
+onnx_path = f"{result_dir}/unet_model_{epochs}_dynamic_quantized.onnx"
+
+torch.onnx.export(
+    model,
+    dummy_input,
+    onnx_path,
+    opset_version=12,  # 최신 ONNX 버전 사용
+    export_params=True,  # 학습된 가중치 포함
+    do_constant_folding=True,  # 상수 폴딩 최적화
+    input_names=["input"],
+    output_names=["output"]
+)
+
+print(f"✅ ONNX 변환 완료! 저장된 경로: {onnx_path}")
+
+import tensorflow as tf
+from onnx_tf.backend import prepare
+
+
+# 🔹 ONNX 모델 로드
+onnx_model_path = f"{result_dir}/unet_model_{epochs}_dynamic_quantized.onnx"
+onnx_model = onnx.load(onnx_model_path)
+
+# ✅ `tensorflow-addons` 없이 변환하는 설정 적용
+tf_rep = prepare(onnx_model, strict=False)  # strict=False 옵션 추가
+
+# 🔹 TensorFlow 모델 저장
+tf_model_path = f"{result_dir}/unet_model_{epochs}_dynamic_quantized_tf"
+tf_rep.export_graph(tf_model_path)
+
+print(f"✅ ONNX → TensorFlow 변환 완료! 저장된 경로: {tf_model_path}")
+
+# 🔹 TensorFlow Lite 변환기 로드
+converter = tf.lite.TFLiteConverter.from_saved_model(tf_model_path)
+
+# 🔹 기본 최적화 적용 (양자화 포함 가능)
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+
+# 🔹 TFLite 변환 실행
+tflite_model = converter.convert()
+
+# 🔹 모델 저장
+tflite_model_path = f"{result_dir}/unet_model_{epochs}_dynamic_quantized.tflite"
+with open(tflite_model_path, "wb") as f:
+    f.write(tflite_model)
+
+print(f"✅ TensorFlow Lite 변환 완료! 저장된 경로: {tflite_model_path}")
+import torch
+import onnx
+import tensorflow as tf
+from onnx_tf.backend import prepare
+
+# 🔹 학습된 모델 로드
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model_path = f"{model_dir}/unet_model_{epochs}.pth"
+
+# 🔹 원본 모델 로드
+model = UNet(input_channels=3, output_channels=1)
+model.load_state_dict(torch.load(model_path, map_location=device))
+model.to(device)
+model.eval()
+
+# 🔹 동적 양자화 적용
+quantized_model = torch.quantization.quantize_dynamic(
+    model, {torch.nn.Linear}, dtype=torch.qint8  # Linear 부분만 INT8 변환
+)
+
+# 🔹 TorchScript 변환 후 저장
+scripted_model = torch.jit.trace(quantized_model, torch.randn(1, 3, 512, 512).to(device))
+quantized_model_path = f"{result_dir}/unet_model_{epochs}_dynamic_quantized.pt"
+torch.jit.save(scripted_model, quantized_model_path)
+
+print(f"✅ 동적 양자화 완료! 저장된 경로: {quantized_model_path}")
+
+# 🔹 ONNX 변환 실행
+onnx_path = f"{result_dir}/unet_model_{epochs}_dynamic_quantized.onnx"
+dummy_input = torch.randn(1, 3, 512, 512).to(device)
+
+torch.onnx.export(
+    scripted_model,  # ✅ TorchScript 모델을 ONNX로 변환
+    dummy_input,
+    onnx_path,
+    opset_version=11,  # ✅ 호환성 문제 방지
+    export_params=True,
+    do_constant_folding=True,
+    input_names=["input"],
+    output_names=["output"]
+)
+
+print(f"✅ ONNX 변환 완료! 저장된 경로: {onnx_path}")
+
+# 🔹 ONNX → TensorFlow 변환
+onnx_model = onnx.load(onnx_path)
+tf_rep = prepare(onnx_model)
+tf_model_path = f"{result_dir}/unet_model_{epochs}_dynamic_quantized_tf"
+tf_rep.export_graph(tf_model_path)
+
+print(f"✅ ONNX → TensorFlow 변환 완료! 저장된 경로: {tf_model_path}")
+
+# 🔹 TensorFlow Lite 변환
+converter = tf.lite.TFLiteConverter.from_saved_model(tf_model_path)
+
+# ✅ 변환 오류 방지 옵션 추가
+converter.target_spec.supported_ops = [
+    tf.lite.OpsSet.TFLITE_BUILTINS,  # 일반 연산
+    tf.lite.OpsSet.SELECT_TF_OPS  # TensorFlow 연산 포함
+]
+
+# ✅ 양자화 적용
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+
+# ✅ TensorFlow Lite 변환 실행
+tflite_model = converter.convert()
+
+# ✅ 모델 저장
+tflite_model_path = f"{result_dir}/unet_model_{epochs}_dynamic_quantized.tflite"
+with open(tflite_model_path, "wb") as f:
+    f.write(tflite_model)
+
+print(f"✅ TensorFlow Lite 변환 완료! 저장된 경로: {tflite_model_path}")
