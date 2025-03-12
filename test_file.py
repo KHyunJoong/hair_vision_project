@@ -332,7 +332,7 @@ torch.onnx.export(
     input_names=["input"],
     output_names=["output"]
 )
-
+# TF_light
 print(f"✅ ONNX 변환 완료! 저장된 경로: {onnx_path}")
 
 # 🔹 ONNX → TensorFlow 변환
