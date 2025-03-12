@@ -1,7 +1,8 @@
 import threading
 import time
 import cv2
-import tflite_runtime.interpreter as tflite
+# import tflite_runtime.interpreter as tflite
+import tensorflow as tf
 import numpy as np
 from collections import deque
 
@@ -9,11 +10,12 @@ from collections import deque
 class_names_condition = ['normal', 'mild', 'moderate', 'severe']
 
 # 두 번째 모델 (hair_obd.py 대체)
+
 class_names_hair = ['1hair', '2hair', '3hair', '4hair']
 
 def hl_condition_script(img_q, result_q):
     model_path = './hlcM_torchQ16.tflite'
-    interpreter = tflite.Interpreter(model_path=model_path)
+    interpreter = tf.lite.Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
@@ -91,7 +93,7 @@ def merge_boxes(boxes, scores, classes, image_width, image_height, threshold=0.5
 
 def hair_obd_script(img_q, result_q):
     model_path = 'yolo200_float32.tflite'
-    interpreter = tflite.Interpreter(model_path=model_path)
+    interpreter = tf.lite.Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
 
     input_details = interpreter.get_input_details()
